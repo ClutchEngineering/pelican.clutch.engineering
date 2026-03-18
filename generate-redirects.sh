@@ -13,8 +13,8 @@ set -euo pipefail
 # TARGET: the domain all URLs redirect to
 # ─────────────────────────────────────────────────────────────
 
-SOURCE="pelican.clutch.engineering"
-TARGET="sidecar.clutch.engineering"
+SOURCE="sidecar.clutch.engineering"
+TARGET="pelican.clutch.engineering"
 OUT="site"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

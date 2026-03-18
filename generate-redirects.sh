@@ -2,43 +2,34 @@
 set -euo pipefail
 
 # ─────────────────────────────────────────────────────────────
-# Generate a complete redirect site for pelican.clutch.engineering
-# that redirects every URL to sidecar.clutch.engineering
+# Generate a redirect site from a frozen snapshot of URLs.
 #
-# Phase 1: pelican.* → sidecar.*  (testing redirects)
-# Phase 2: swap TARGET to pelican, deploy on sidecar repo
+# urls.txt contains a permanent snapshot of every URL path
+# from sidecar.clutch.engineering as of 2026-03-15. This file
+# is committed to the repo and should NOT be regenerated from
+# live data — it is the canonical redirect map.
 #
-# This script pulls the live sitemap.xml from production to
-# ensure 1:1 coverage of every URL on the site.
+# SOURCE: the domain this site is served on
+# TARGET: the domain all URLs redirect to
 # ─────────────────────────────────────────────────────────────
 
 SOURCE="pelican.clutch.engineering"
 TARGET="sidecar.clutch.engineering"
 OUT="site"
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+URLS_FILE="$SCRIPT_DIR/urls.txt"
+
+if [ ! -f "$URLS_FILE" ]; then
+  echo "Error: urls.txt not found. This file is a frozen snapshot and must be committed to the repo."
+  exit 1
+fi
+
 rm -rf "$OUT"
 mkdir -p "$OUT"
 
-# ── Download live sitemap from production ────────────────────
-echo "Downloading sitemap from https://${TARGET}/sitemap.xml..."
-SITEMAP_FILE=$(mktemp)
-curl -sS "https://${TARGET}/sitemap.xml" -o "$SITEMAP_FILE"
-
-# Extract all URLs from the sitemap, convert to paths
-SITEMAP_PATHS=$(sed -n 's|.*<loc>https://'"${TARGET}"'\([^<]*\)</loc>.*|\1|p' "$SITEMAP_FILE" | sort -u)
-SITEMAP_COUNT=$(echo "$SITEMAP_PATHS" | wc -l | tr -d ' ')
-echo "Found ${SITEMAP_COUNT} URLs in production sitemap"
-
-# ── Pages known to exist but not in sitemap ──────────────────
-# leave-a-review: explicitly excluded from sitemap generation
-# feed.atom: generated separately from the sitemap dictionary
-EXTRA_PATHS="/leave-a-review/
-/feed.atom"
-
-# Combine all paths
-ALL_PATHS=$(printf '%s\n%s' "$SITEMAP_PATHS" "$EXTRA_PATHS" | sort -u)
-TOTAL_COUNT=$(echo "$ALL_PATHS" | wc -l | tr -d ' ')
-echo "Total paths including extras: ${TOTAL_COUNT}"
+URL_COUNT=$(wc -l < "$URLS_FILE" | tr -d ' ')
+echo "Loading ${URL_COUNT} URLs from frozen snapshot (urls.txt)"
 
 # ── Helper: create a redirect HTML file ──────────────────────
 make_redirect() {
@@ -49,12 +40,7 @@ make_redirect() {
   if [ "$url_path" = "/" ]; then
     local file="$OUT/index.html"
   elif [[ "$url_path" == *.* ]] && [[ "$url_path" != */ ]]; then
-    # Non-directory file (e.g. /feed.atom) — can't create index.html
-    # We'll skip these and let 404.html handle them since GitHub Pages
-    # can't serve a redirect for a bare file path without the actual file
-    mkdir -p "$OUT/$(dirname "$url_path")"
-    # Create an HTML file at this exact path — won't work for .atom/.xml
-    # but the 404.html catch-all will handle these
+    # Non-directory file (e.g. /feed.atom) — skip, 404.html handles these
     return
   else
     local dir="$OUT${url_path}"
@@ -87,18 +73,16 @@ while IFS= read -r path; do
   [ -z "$path" ] && continue
   make_redirect "$path"
   GENERATED=$((GENERATED + 1))
-done <<< "$ALL_PATHS"
+done < "$URLS_FILE"
 
 echo "Generated ${GENERATED} redirect pages"
 
 # ── Catch-all 404.html ───────────────────────────────────────
 # GitHub Pages serves 404.html for any unmatched path.
-# This is the safety net for:
-#   - Any new pages added after this script last ran
-#   - Non-directory files (feed.atom, *.json, etc.)
-#   - Query strings and hash fragments
+# Safety net for non-directory files, query strings, and any
+# paths not in the frozen snapshot.
 # ──────────────────────────────────────────────────────────────
-cat > "$OUT/404.html" <<'CATCHALL_HTML'
+cat > "$OUT/404.html" <<CATCHALL_HTML
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -106,7 +90,7 @@ cat > "$OUT/404.html" <<'CATCHALL_HTML'
 <title>Redirecting…</title>
 <script>
 (function() {
-  var target = "https://sidecar.clutch.engineering" + window.location.pathname + window.location.search + window.location.hash;
+  var target = "https://${TARGET}" + window.location.pathname + window.location.search + window.location.hash;
   var link = document.createElement("link");
   link.rel = "canonical";
   link.href = target;
@@ -120,10 +104,10 @@ cat > "$OUT/404.html" <<'CATCHALL_HTML'
 </script>
 </head>
 <body>
-<p>Redirecting to <a id="target-link">sidecar.clutch.engineering</a>…</p>
+<p>Redirecting to <a id="target-link">${TARGET}</a>…</p>
 <script>
 var a = document.getElementById("target-link");
-var url = "https://sidecar.clutch.engineering" + window.location.pathname;
+var url = "https://${TARGET}" + window.location.pathname;
 a.href = url;
 a.textContent = url;
 </script>
@@ -139,13 +123,10 @@ echo "$SOURCE" > "$OUT/CNAME"
 # ── .nojekyll ─────────────────────────────────────────────────
 touch "$OUT/.nojekyll"
 
-# ── Cleanup ───────────────────────────────────────────────────
-rm -f "$SITEMAP_FILE"
-
 # ── Summary ───────────────────────────────────────────────────
 FINAL_COUNT=$(find "$OUT" -name '*.html' | wc -l | tr -d ' ')
 echo ""
 echo "Done! ${FINAL_COUNT} HTML files in ${OUT}/"
-echo "  - ${GENERATED} pages from sitemap + extras"
+echo "  - ${GENERATED} pages from frozen snapshot"
 echo "  - 1 catch-all 404.html"
 echo "  - CNAME → ${SOURCE}"
